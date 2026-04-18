@@ -1,0 +1,48 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mshegolev/harbor-registry-mcp",
+  "description": "Harbor Registry MCP — projects, repos, artifacts, storage reports, cleanup (with dry-run).",
+  "repository": {
+    "url": "https://github.com/mshegolev/harbor-registry-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "harbor-registry-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "HARBOR_URL",
+          "description": "Harbor URL (e.g. https://harbor.example.com)",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "HARBOR_USERNAME",
+          "description": "Harbor username (robot account recommended for automation)",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "HARBOR_PASSWORD",
+          "description": "Harbor password or robot account token",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "HARBOR_SSL_VERIFY",
+          "description": "Verify SSL certificates (true/false). Set to 'false' for self-signed certs.",
+          "isRequired": false,
+          "format": "string",
+          "default": "true"
+        }
+      ]
+    }
+  ]
+}
