@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Dependencies are declared as floors (mcp>=1.2,<2, requests>=2.31, pydantic>=2.0),
+  # so a green badge only proves the package installed on the day of the last commit.
+  # Between 2026-05-02 and 2026-08-10 nothing re-ran, and in that window `mcp` 2.0
+  # dropped `mcp.server.fastmcp` — the console script was broken for months while CI
+  # still showed green. The weekly run re-resolves the dependency tree and fails loudly.
+  schedule:
+    - cron: "17 4 * * 1"  # Mondays 04:17 UTC
+  workflow_dispatch:
 
 permissions:
   contents: read
