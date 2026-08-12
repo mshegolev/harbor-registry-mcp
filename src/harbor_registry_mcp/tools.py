@@ -138,8 +138,8 @@ async def _report(ctx: Context, progress: float, message: str) -> None:
     structured_output=True,
 )
 def harbor_list_projects(
-    page: Annotated[int, Field(default=1, ge=1, le=1000, description="Page number (1-based).")] = 1,
-    page_size: Annotated[int, Field(default=50, ge=1, le=100, description="Items per page (1-100).")] = 50,
+    page: Annotated[int, Field(ge=1, le=1000, description="Page number (1-based).")] = 1,
+    page_size: Annotated[int, Field(ge=1, le=100, description="Items per page (1-100).")] = 50,
 ) -> ProjectsListOutput:
     """List Harbor projects, sorted by repository count (descending *within the page*).
 
@@ -200,8 +200,8 @@ def harbor_list_projects(
 )
 def harbor_list_repos(
     project_name: Annotated[str, Field(min_length=1, max_length=255, description="Harbor project name.")],
-    page: Annotated[int, Field(default=1, ge=1, le=1000, description="Page number (1-based).")] = 1,
-    page_size: Annotated[int, Field(default=50, ge=1, le=100, description="Items per page (1-100).")] = 50,
+    page: Annotated[int, Field(ge=1, le=1000, description="Page number (1-based).")] = 1,
+    page_size: Annotated[int, Field(ge=1, le=100, description="Items per page (1-100).")] = 50,
 ) -> RepositoriesListOutput:
     """List repositories in a Harbor project.
 
@@ -262,8 +262,8 @@ def harbor_list_artifacts(
     repository_name: Annotated[
         str, Field(min_length=1, max_length=255, description="Repository name within the project.")
     ],
-    page: Annotated[int, Field(default=1, ge=1, le=1000, description="Page number (1-based).")] = 1,
-    page_size: Annotated[int, Field(default=50, ge=1, le=100, description="Items per page (1-100).")] = 50,
+    page: Annotated[int, Field(ge=1, le=1000, description="Page number (1-based).")] = 1,
+    page_size: Annotated[int, Field(ge=1, le=100, description="Items per page (1-100).")] = 50,
 ) -> ArtifactsListOutput:
     """List artifacts (tags) in a repository, newest first.
 
@@ -401,13 +401,13 @@ async def harbor_cleanup_candidates(
     project_name: Annotated[str, Field(min_length=1, max_length=255, description="Harbor project name.")],
     ctx: Context,
     include_untagged: Annotated[
-        bool, Field(default=True, description="Suggest deleting untagged artifacts (orphaned layers).")
+        bool, Field(description="Suggest deleting untagged artifacts (orphaned layers).")
     ] = True,
     include_zero_pulls: Annotated[
-        bool, Field(default=True, description="Suggest deleting artifacts that have never been pulled.")
+        bool, Field(description="Suggest deleting artifacts that have never been pulled.")
     ] = True,
     keep_latest_per_repo: Annotated[
-        int, Field(default=1, ge=0, le=100, description="How many newest artifacts to always keep per repository.")
+        int, Field(ge=0, le=100, description="How many newest artifacts to always keep per repository.")
     ] = 1,
 ) -> CleanupCandidatesOutput:
     """Suggest which artifacts could be deleted to reclaim space.
@@ -593,7 +593,6 @@ async def harbor_delete_untagged(
     repository_name: Annotated[
         str | None,
         Field(
-            default=None,
             description="If set, only that repository is processed; otherwise every repository in the project.",
         ),
     ] = None,
@@ -676,9 +675,9 @@ def harbor_delete_old_artifacts(
     repository_name: Annotated[
         str, Field(min_length=1, max_length=255, description="Repository name within the project.")
     ],
-    keep_count: Annotated[int, Field(default=1, ge=0, le=1000, description="Number of newest artifacts to keep.")] = 1,
+    keep_count: Annotated[int, Field(ge=0, le=1000, description="Number of newest artifacts to keep.")] = 1,
     dry_run: Annotated[
-        bool, Field(default=True, description="If True (default) — only report what would be deleted, do not delete.")
+        bool, Field(description="If True (default) — only report what would be deleted, do not delete.")
     ] = True,
 ) -> DeleteOldOutput:
     """Keep the N newest artifacts in a repository, delete the rest.

@@ -11,21 +11,23 @@ while the suite stayed green. This module closes that hole:
   (``mcp.list_tools()`` is the in-process equivalent of a ``tools/list``
   request);
 - pins the catalogue — all 8 tools, their annotations, their input schemas
-  and the generated ``outputSchema``.
+  (including every advertised **default**) and the generated ``outputSchema``.
 
 No network, no credentials: ``list_tools`` is pure introspection.
 """
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import pathlib
 from importlib.metadata import entry_points
 from typing import Any
 
 import pytest
 
 # Importing tools attaches @mcp.tool decorators.
-import harbor_registry_mcp.tools  # noqa: F401
+import harbor_registry_mcp.tools
 from harbor_registry_mcp._mcp import mcp
 
 EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
@@ -88,6 +90,33 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
 }
 
 DESTRUCTIVE_TOOLS = {"harbor_delete_artifact", "harbor_delete_untagged", "harbor_delete_old_artifacts"}
+
+# Every default an MCP client actually reads out of ``inputSchema``, per tool.
+# Parameters absent from a tool's mapping must advertise *no* default at all.
+#
+# Why this is pinned rather than obvious: a parameter written as
+# ``Annotated[bool, Field(default=True, ...)] = True`` carries the default
+# twice, and only the **signature** one survives into the schema — pydantic
+# discards ``Field(default=…)`` when a signature default is present, silently.
+# So editing ``Field(default=True)`` to ``False`` changes nothing on the wire
+# while looking decisive in review. The repo therefore keeps exactly one
+# default per parameter (in the signature); this table is the wire-level proof
+# that it says what we think it says, and ``test_defaults_are_declared_once``
+# below stops the second default from creeping back.
+EXPECTED_SCHEMA_DEFAULTS: dict[str, dict[str, Any]] = {
+    "harbor_list_projects": {"page": 1, "page_size": 50},
+    "harbor_list_repos": {"page": 1, "page_size": 50},
+    "harbor_list_artifacts": {"page": 1, "page_size": 50},
+    "harbor_storage_report": {},
+    "harbor_cleanup_candidates": {
+        "include_untagged": True,
+        "include_zero_pulls": True,
+        "keep_latest_per_repo": 1,
+    },
+    "harbor_delete_artifact": {},
+    "harbor_delete_untagged": {"repository_name": None},
+    "harbor_delete_old_artifacts": {"keep_count": 1, "dry_run": True},
+}
 
 
 @pytest.fixture(scope="module")
@@ -183,3 +212,90 @@ def test_bulk_delete_defaults_to_dry_run(listed_tools: list[Any]) -> None:
     tool = next(t for t in listed_tools if t.name == "harbor_delete_old_artifacts")
     dry_run = tool.inputSchema["properties"]["dry_run"]
     assert dry_run.get("default") is True, f"dry_run default is {dry_run.get('default')!r}, expected True"
+
+
+def test_every_dry_run_flag_defaults_to_true(listed_tools: list[Any]) -> None:
+    """Whatever the catalogue grows into, a ``dry_run`` switch always starts safe.
+
+    Broader than the test above on purpose: a *new* destructive tool that ships
+    ``dry_run=False`` would slip past a check pinned to one tool name.
+    """
+    flags = {
+        t.name: t.inputSchema["properties"]["dry_run"].get("default")
+        for t in listed_tools
+        if "dry_run" in t.inputSchema.get("properties", {})
+    }
+    assert flags, "no tool exposes dry_run any more — the bulk-delete guard disappeared"
+    unsafe = {name: value for name, value in flags.items() if value is not True}
+    assert not unsafe, f"dry_run must default to True; got {unsafe}"
+
+
+@pytest.mark.parametrize("tool_name", list(EXPECTED_TOOLS))
+def test_input_schema_defaults(listed_tools: list[Any], tool_name: str) -> None:
+    """Pin every default the client is told about — and the absence of the rest.
+
+    Equality (not ``issubset``) is deliberate: it fails both when a default
+    changes value and when a required parameter silently acquires one, which
+    would turn a mandatory argument into an optional guess.
+    """
+    tool = next(t for t in listed_tools if t.name == tool_name)
+    advertised = {
+        name: spec["default"] for name, spec in tool.inputSchema.get("properties", {}).items() if "default" in spec
+    }
+    assert advertised == EXPECTED_SCHEMA_DEFAULTS[tool_name], (
+        f"{tool_name}: schema defaults drifted.\n"
+        f"  advertised: {advertised}\n"
+        f"  expected:   {EXPECTED_SCHEMA_DEFAULTS[tool_name]}"
+    )
+
+
+def _annotated_field_defaults(tree: ast.Module) -> list[str]:
+    """Find parameters declaring a default *both* in ``Field(...)`` and in the signature."""
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        args = node.args
+        positional = args.posonlyargs + args.args
+        # ``args.defaults`` covers only the *trailing* positional params — left-pad it.
+        padded: list[ast.expr | None] = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+        paired: list[tuple[ast.arg, ast.expr | None]] = list(zip(positional, padded, strict=True))
+        paired += list(zip(args.kwonlyargs, args.kw_defaults, strict=True))
+
+        for arg, signature_default in paired:
+            annotation = arg.annotation
+            if signature_default is None or not isinstance(annotation, ast.Subscript):
+                continue
+            if getattr(annotation.value, "id", None) != "Annotated":
+                continue
+            metadata = annotation.slice.elts[1:] if isinstance(annotation.slice, ast.Tuple) else []
+            for item in metadata:
+                if not isinstance(item, ast.Call):
+                    continue
+                name = getattr(item.func, "id", None) or getattr(item.func, "attr", None)
+                if name != "Field":
+                    continue
+                for keyword in item.keywords:
+                    if keyword.arg in {"default", "default_factory"}:
+                        offenders.append(f"{node.name}.{arg.arg} (line {arg.lineno}): Field({keyword.arg}=…)")
+    return offenders
+
+
+def test_defaults_are_declared_once() -> None:
+    """A parameter may state its default in exactly one place — the signature.
+
+    ``Annotated[bool, Field(default=True, ...)] = True`` compiles, runs and lies:
+    pydantic keeps the signature default and drops the ``Field`` one, so the two
+    can drift apart and the schema silently follows the one nobody reads first.
+    On ``dry_run``, guarding an irreversible bulk delete, that is a safety bug
+    dressed as a style nit.
+    """
+    package_dir = pathlib.Path(harbor_registry_mcp.tools.__file__).parent
+    modules = sorted(package_dir.glob("*.py"))
+    assert modules, f"no sources found under {package_dir} — the scan would pass vacuously"
+
+    offenders: list[str] = []
+    for module in modules:
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        offenders += [f"{module.name}: {hit}" for hit in _annotated_field_defaults(tree)]
+    assert not offenders, "default declared twice (Field + signature); drop the Field one:\n  " + "\n  ".join(offenders)

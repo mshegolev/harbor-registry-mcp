@@ -3,6 +3,24 @@
 All notable changes to `harbor-registry-mcp` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Every tool parameter now declares its default exactly once, in the function
+  signature. Twelve parameters previously wrote it twice — `Annotated[bool,
+  Field(default=True, …)] = True` — and only the signature one ever reached the
+  `inputSchema` an MCP client reads; pydantic discards the `Field` default when a
+  signature default is present. Editing `Field(default=…)` therefore changed
+  nothing on the wire while looking decisive in review. No default value changed:
+  the emitted `inputSchema`/`outputSchema` are byte-identical to 0.1.1.
+
+### Added
+- `test_input_schema_defaults` pins every default the client is told about (and
+  the absence of one on required parameters); `test_every_dry_run_flag_defaults_to_true`
+  holds the bulk-delete guard for any tool exposing `dry_run`, not just today's;
+  `test_defaults_are_declared_once` fails if the second, ineffective default
+  creeps back into a `Field(...)`.
+
 ## [0.1.1] — 2026-08-10
 
 ### Fixed
