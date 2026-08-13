@@ -5,16 +5,39 @@ All notable changes to `harbor-registry-mcp` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-13
+
 ### Changed
+- **`harbor_delete_untagged` no longer deletes by default.** It now takes
+  `dry_run: bool = True`, matching its milder neighbour
+  `harbor_delete_old_artifacts`. Protection was distributed backwards: the
+  keep-N tool, which touches one repository and spares the N newest artifacts,
+  was guarded — while the untagged sweep, which walks **every** repository in
+  the project when `repository_name` is omitted and whose own docstring admits
+  "the full project sweep is opaque", had no dry-run at all. In dry-run **no
+  delete request is issued**; the tool only collects candidates.
+
+  This is a behaviour change at the call site: a call that used to delete now
+  reports. Pass `dry_run=False` to get the old behaviour.
 - Every tool parameter now declares its default exactly once, in the function
   signature. Twelve parameters previously wrote it twice — `Annotated[bool,
   Field(default=True, …)] = True` — and only the signature one ever reached the
   `inputSchema` an MCP client reads; pydantic discards the `Field` default when a
   signature default is present. Editing `Field(default=…)` therefore changed
-  nothing on the wire while looking decisive in review. No default value changed:
-  the emitted `inputSchema`/`outputSchema` are byte-identical to 0.1.1.
+  nothing on the wire while looking decisive in review. No default value changed
+  in that refactor: it left the emitted schemas byte-identical to 0.1.1.
 
 ### Added
+- `DeleteUntaggedOutput` gained `dry_run` and `hint`; each entry in `deleted`
+  gained `deleted` (`True` after a real delete, `None` in dry-run) — the same
+  way `harbor_delete_old_artifacts` marks "what would go". `deleted_count` and
+  `freed_*` therefore describe candidates in dry-run, as they do there.
+- Tests: the dry-run guard is asserted against a stub client that records every
+  `delete()` call, so "dry-run deletes nothing" is proven by an empty call log
+  rather than by the response text. `test_bulk_delete_defaults_to_dry_run` is
+  now parametrized over both bulk-delete tools and fails if either one *loses*
+  its `dry_run` — a hole `test_every_dry_run_flag_defaults_to_true` cannot
+  cover, since it only judges the flags that still exist.
 - `test_input_schema_defaults` pins every default the client is told about (and
   the absence of one on required parameters); `test_every_dry_run_flag_defaults_to_true`
   holds the bulk-delete guard for any tool exposing `dry_run`, not just today's;

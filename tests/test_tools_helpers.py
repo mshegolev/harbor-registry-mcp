@@ -1,12 +1,23 @@
-"""Unit tests for pure shaping helpers in :mod:`harbor_registry_mcp.tools`.
+"""Unit tests for :mod:`harbor_registry_mcp.tools`.
 
-These functions take raw Harbor API dicts and shape them into the
-TypedDict output schemas. They have no I/O, so we exercise them directly
-without mocking any HTTP client.
+Two groups:
+
+- the pure shaping helpers, which take raw Harbor API dicts and shape them
+  into the TypedDict output schemas — no I/O, exercised directly;
+- the dry-run guard of ``harbor_delete_untagged``, which *is* about I/O:
+  the point is that in dry-run the tool issues no delete call at all. A stub
+  client records every ``delete()`` so the test can assert the count is zero
+  rather than trusting the response text.
 """
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
+import pytest
+
+from harbor_registry_mcp import tools
 from harbor_registry_mcp.tools import _public, _pull_time, _shape_artifact, _short
 
 
@@ -141,3 +152,102 @@ class TestShapeArtifact:
             }
         )
         assert shaped["push_time"] is None
+
+
+# ── harbor_delete_untagged: the dry-run guard ──────────────────────────────
+#
+# ``harbor_delete_untagged`` sweeps every repository of a project when
+# ``repository_name`` is omitted — the widest blast radius in the catalogue.
+# Until 0.2.0 it had no dry_run at all while its milder neighbour
+# ``harbor_delete_old_artifacts`` did. These tests hold the guard in place at
+# the only level that matters: whether a DELETE actually leaves the process.
+
+
+class _StubClient:
+    """Minimal stand-in for :class:`HarborClient` that records deletes."""
+
+    def __init__(self, repos: list[dict[str, Any]], artifacts: list[dict[str, Any]]) -> None:
+        self._repos = repos
+        self._artifacts = artifacts
+        self.deleted_paths: list[str] = []
+
+    def get_all_pages(
+        self,
+        endpoint: str,
+        *,
+        page_size: int = 100,
+        extra_params: dict[str, Any] | None = None,
+        max_pages: int = 100,
+    ) -> list[dict[str, Any]]:
+        return self._artifacts if "/artifacts" in endpoint else self._repos
+
+    def delete(self, endpoint: str) -> dict[str, Any]:
+        self.deleted_paths.append(endpoint)
+        return {}
+
+
+class _NullContext:
+    """MCP ``Context`` stub — swallows progress/info events."""
+
+    async def report_progress(self, progress: float, message: str | None = None) -> None:
+        return None
+
+    async def info(self, message: str) -> None:
+        return None
+
+
+REPOS = [{"name": "demo/app"}]
+ARTIFACTS = [
+    {"digest": "sha256:tagged0", "size": 100, "tags": [{"name": "v1.0"}]},
+    {"digest": "sha256:orphan1", "size": 1024, "tags": []},
+    {"digest": "sha256:orphan2", "size": 2048, "tags": None},
+]
+
+
+@pytest.fixture
+def stub_client(monkeypatch: pytest.MonkeyPatch) -> _StubClient:
+    client = _StubClient(REPOS, ARTIFACTS)
+    monkeypatch.setattr(tools, "get_client", lambda: client)
+    return client
+
+
+def _sweep(**kwargs: Any) -> dict[str, Any]:
+    """Invoke the tool and return its structured payload."""
+    result = asyncio.run(tools.harbor_delete_untagged("demo", _NullContext(), **kwargs))  # type: ignore[arg-type]
+    return dict(result.structuredContent or {})
+
+
+class TestDeleteUntaggedDryRun:
+    def test_default_call_deletes_nothing(self, stub_client: _StubClient) -> None:
+        """No ``dry_run`` argument at all must still be a no-op.
+
+        This is the whole point of the default: an agent that calls the tool
+        the obvious way does not destroy anything.
+        """
+        payload = _sweep()
+
+        assert stub_client.deleted_paths == [], "dry-run issued a DELETE to Harbor"
+        assert payload["dry_run"] is True
+
+    def test_dry_run_reports_candidates_without_deleting(self, stub_client: _StubClient) -> None:
+        payload = _sweep(dry_run=True)
+
+        assert stub_client.deleted_paths == [], "dry-run issued a DELETE to Harbor"
+        assert payload["deleted_count"] == 2, "both untagged artifacts should be reported as candidates"
+        assert [d["deleted"] for d in payload["deleted"]] == [None, None], "candidates must not claim to be deleted"
+        assert payload["freed_bytes"] == 3072, "dry-run must still report the space that would be freed"
+        assert payload["errors"] == []
+        assert payload["hint"] == "Re-run with dry_run=False to perform the deletion."
+
+    def test_dry_run_false_actually_deletes_untagged_only(self, stub_client: _StubClient) -> None:
+        payload = _sweep(dry_run=False)
+
+        assert len(stub_client.deleted_paths) == 2, f"expected 2 deletes, got {stub_client.deleted_paths}"
+        assert all("orphan" in path for path in stub_client.deleted_paths), (
+            f"a tagged artifact was deleted: {stub_client.deleted_paths}"
+        )
+        assert payload["dry_run"] is False
+        assert payload["deleted_count"] == 2
+        assert [d["deleted"] for d in payload["deleted"]] == [True, True]
+        assert payload["freed_bytes"] == 3072
+        assert payload["hint"] is None

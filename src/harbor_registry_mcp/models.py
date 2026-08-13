@@ -152,9 +152,16 @@ class DeleteArtifactOutput(TypedDict):
 
 
 class DeletedArtifact(TypedDict):
+    """One untagged artifact touched by :func:`harbor_delete_untagged`.
+
+    ``deleted`` mirrors :class:`ToDeleteArtifact`: ``True`` after a real
+    delete, ``None`` in dry-run (i.e. "this is what *would* go").
+    """
+
     repository: str
     digest: str
     size: str
+    deleted: bool | None
 
 
 class DeleteErrorItem(TypedDict):
@@ -164,13 +171,23 @@ class DeleteErrorItem(TypedDict):
 
 
 class DeleteUntaggedOutput(TypedDict):
+    """Result of :func:`harbor_delete_untagged`.
+
+    ``dry_run=True`` means nothing was deleted — every item in ``deleted``
+    has ``deleted=None``, ``deleted_count`` counts *candidates*, and
+    ``freed_*`` reflects hypothetical space reclaim. ``errors`` can only be
+    non-empty on a real run, since dry-run issues no delete calls at all.
+    """
+
     project: str
+    dry_run: bool
     repos_scanned: list[str]
     deleted_count: int
     freed_size: str
     freed_bytes: int
     deleted: list[DeletedArtifact]
     errors: list[DeleteErrorItem]
+    hint: str | None
 
 
 class KeptArtifact(TypedDict):

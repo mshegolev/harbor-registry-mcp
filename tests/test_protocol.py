@@ -78,7 +78,7 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
         "destructiveHint": True,
         "idempotentHint": True,
         "required_params": {"project_name"},
-        "optional_params": {"repository_name"},
+        "optional_params": {"repository_name", "dry_run"},
     },
     "harbor_delete_old_artifacts": {
         "readOnlyHint": False,
@@ -90,6 +90,11 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
 }
 
 DESTRUCTIVE_TOOLS = {"harbor_delete_artifact", "harbor_delete_untagged", "harbor_delete_old_artifacts"}
+
+# Destructive tools that act on *many* artifacts in one call. Both must ship a
+# dry_run guard; ``harbor_delete_artifact`` is excluded because it deletes one
+# explicitly named reference — the confirmation is the argument itself.
+BULK_DELETE_TOOLS = {"harbor_delete_untagged", "harbor_delete_old_artifacts"}
 
 # Every default an MCP client actually reads out of ``inputSchema``, per tool.
 # Parameters absent from a tool's mapping must advertise *no* default at all.
@@ -114,7 +119,7 @@ EXPECTED_SCHEMA_DEFAULTS: dict[str, dict[str, Any]] = {
         "keep_latest_per_repo": 1,
     },
     "harbor_delete_artifact": {},
-    "harbor_delete_untagged": {"repository_name": None},
+    "harbor_delete_untagged": {"repository_name": None, "dry_run": True},
     "harbor_delete_old_artifacts": {"keep_count": 1, "dry_run": True},
 }
 
@@ -206,12 +211,20 @@ def test_output_schema_is_generated(listed_tools: list[Any], tool_name: str) -> 
     assert tool.outputSchema.get("properties"), f"{tool_name} outputSchema has no properties"
 
 
-def test_bulk_delete_defaults_to_dry_run(listed_tools: list[Any]) -> None:
-    """``harbor_delete_old_artifacts`` is irreversible; the schema an agent
-    reads must advertise ``dry_run`` defaulting to True."""
-    tool = next(t for t in listed_tools if t.name == "harbor_delete_old_artifacts")
-    dry_run = tool.inputSchema["properties"]["dry_run"]
-    assert dry_run.get("default") is True, f"dry_run default is {dry_run.get('default')!r}, expected True"
+@pytest.mark.parametrize("tool_name", sorted(BULK_DELETE_TOOLS))
+def test_bulk_delete_defaults_to_dry_run(listed_tools: list[Any], tool_name: str) -> None:
+    """Both bulk deletes are irreversible; the schema an agent reads must
+    advertise ``dry_run`` defaulting to True.
+
+    Named per tool on purpose: ``test_every_dry_run_flag_defaults_to_true``
+    below only judges the flags that exist, so a tool *losing* its ``dry_run``
+    would slip past it. This one fails if the flag is gone.
+    """
+    tool = next(t for t in listed_tools if t.name == tool_name)
+    properties = tool.inputSchema["properties"]
+    assert "dry_run" in properties, f"{tool_name} no longer exposes dry_run — bulk-delete guard removed"
+    dry_run = properties["dry_run"]
+    assert dry_run.get("default") is True, f"{tool_name}.dry_run default is {dry_run.get('default')!r}, expected True"
 
 
 def test_every_dry_run_flag_defaults_to_true(listed_tools: list[Any]) -> None:

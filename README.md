@@ -19,7 +19,7 @@ A couple of community Harbor MCPs exist ([`nomagicln/mcp-harbor`](https://github
 ## Design highlights
 
 - **Tool annotations** — read-only tools get `readOnlyHint: True`; destructive ones (`harbor_delete_*`) carry `destructiveHint: True` so MCP clients ask for confirmation.
-- **Dry-run by default** on bulk cleanup (`harbor_delete_old_artifacts(dry_run=True)`) — the agent must flip it to execute.
+- **Dry-run by default** on both bulk cleanups (`harbor_delete_untagged`, `harbor_delete_old_artifacts`) — the agent must pass `dry_run=False` to execute.
 - **Structured output** — every tool returns a typed payload (TypedDict) + a markdown summary.
 - **Structured errors** — 401 / 403 / 404 / 429 / 5xx mapped to actionable hints.
 - **Pydantic input validation** for every argument.
@@ -38,7 +38,7 @@ A couple of community Harbor MCPs exist ([`nomagicln/mcp-harbor`](https://github
 
 **Cleanup execution (destructive)**
 - `harbor_delete_artifact` — delete a single artifact by tag or digest
-- `harbor_delete_untagged` — delete all untagged artifacts in a project/repo
+- `harbor_delete_untagged` — delete all untagged artifacts in a project/repo (dry-run default)
 - `harbor_delete_old_artifacts` — keep N latest per repo, delete the rest (dry-run default)
 
 ## Installation
@@ -112,7 +112,7 @@ claude mcp list
 
 - Read tools use `readOnlyHint: True` — no confirmation needed.
 - Delete tools use `destructiveHint: True` — clients should confirm.
-- `harbor_delete_old_artifacts` defaults to `dry_run=True`; the agent must explicitly set `dry_run=False` to actually delete.
+- `harbor_delete_untagged` and `harbor_delete_old_artifacts` both default to `dry_run=True`; the agent must explicitly set `dry_run=False` to actually delete.
 - `harbor_cleanup_candidates` is **read-only** — it only suggests candidates, never deletes.
 
 ## Development

@@ -1,8 +1,8 @@
 """MCP tools for Harbor Registry.
 
 8 tools — 5 read-only (discovery + reports + cleanup planning), 3
-destructive (delete operations, ``destructiveHint: True``). Bulk delete
-defaults to dry-run.
+destructive (delete operations, ``destructiveHint: True``). Both bulk
+deletes default to dry-run.
 
 **Threading model.** All tools are synchronous ``def``. FastMCP runs them
 in a worker thread via ``anyio.to_thread.run_sync``, so blocking HTTP
@@ -474,7 +474,8 @@ async def harbor_cleanup_candidates(
             "hint": (
                 "Use harbor_delete_artifact for individual artifacts, "
                 "harbor_delete_untagged for bulk untagged, or "
-                "harbor_delete_old_artifacts (dry_run=True) for keep-N policies."
+                "harbor_delete_old_artifacts for keep-N policies. Both bulk "
+                "tools default to dry_run=True — pass dry_run=False to delete."
             ),
         }
         header = (
@@ -596,13 +597,21 @@ async def harbor_delete_untagged(
             description="If set, only that repository is processed; otherwise every repository in the project.",
         ),
     ] = None,
+    dry_run: Annotated[
+        bool, Field(description="If True (default) — only report what would be deleted, do not delete.")
+    ] = True,
 ) -> DeleteUntaggedOutput:
     """Delete all untagged artifacts in a project (or single repository).
 
-    **DESTRUCTIVE.** Untagged artifacts are typically orphaned layers left
-    behind after pushing a new tag of the same image — generally safe to
-    delete. The full project sweep is opaque, so the response includes
-    ``repos_scanned`` for visibility.
+    **DESTRUCTIVE.** ``dry_run=True`` is the default — nothing is deleted
+    unless the agent explicitly passes ``dry_run=False``. In dry-run no
+    delete request is issued at all; the response lists the candidates with
+    ``deleted=None`` and the space they would free.
+
+    Untagged artifacts are typically orphaned layers left behind after
+    pushing a new tag of the same image — generally safe to delete. The full
+    project sweep is opaque, so the response includes ``repos_scanned`` for
+    visibility.
     """
     try:
         client = get_client()
@@ -626,30 +635,43 @@ async def harbor_delete_untagged(
                     continue
                 digest = art.get("digest", "")
                 size = int(art.get("size", 0) or 0)
+                if dry_run:
+                    total_freed += size
+                    deleted.append(
+                        {"repository": repo, "digest": digest[:19], "size": size_human(size), "deleted": None}
+                    )
+                    continue
                 try:
                     client.delete(
                         f"/projects/{project_name}/repositories/{encode_repo(repo)}/artifacts/{encode_repo(digest)}"
                     )
                     total_freed += size
-                    deleted.append({"repository": repo, "digest": digest[:19], "size": size_human(size)})
+                    deleted.append(
+                        {"repository": repo, "digest": digest[:19], "size": size_human(size), "deleted": True}
+                    )
                 except Exception as e:
                     errors.append({"repository": repo, "digest": digest[:19], "error": str(e)[:120]})
 
-        await _report(ctx, 1.0, f"{len(deleted)} deleted, {len(errors)} failed")
+        verb = "would be deleted" if dry_run else "deleted"
+        await _report(ctx, 1.0, f"{len(deleted)} {verb}, {len(errors)} failed")
 
         result: DeleteUntaggedOutput = {
             "project": project_name,
+            "dry_run": dry_run,
             "repos_scanned": repos_to_clean,
             "deleted_count": len(deleted),
             "freed_size": size_human(total_freed),
             "freed_bytes": total_freed,
             "deleted": deleted,
             "errors": errors,
+            "hint": "Re-run with dry_run=False to perform the deletion." if dry_run else None,
         }
+        prefix = "🔎 dry-run" if dry_run else "🗑 deleted"
+        noun = "reclaimable" if dry_run else "freed"
         md = (
-            f"## Untagged sweep in {project_name}\n\n"
-            f"Deleted **{len(deleted)}** artifacts "
-            f"({size_human(total_freed)} freed) "
+            f"## {prefix}: untagged sweep in {project_name}\n\n"
+            f"**{len(deleted)}** artifacts {verb} "
+            f"({size_human(total_freed)} {noun}) "
             f"across {len(repos_to_clean)} repos."
         )
         if errors:
